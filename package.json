@@ -1,0 +1,22 @@
+{
+  "name": "qrv-verify",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Standalone public verification service for QR-V records, QRVID lookup, branded verification pages, and JSON verification API.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "NODE_ENV=development node server.js",
+    "check": "node --check server.js && node --check scripts/verify-domain-smoke.mjs",
+    "smoke:verify": "node scripts/verify-domain-smoke.mjs",
+    "validate:prod": "npm run check"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "pg": "^8.16.3"
+  }
+}
