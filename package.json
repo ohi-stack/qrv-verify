@@ -5,9 +5,10 @@
   "description": "Standalone public verification service for QR-V records, QRVID lookup, branded verification pages, and JSON verification API.",
   "main": "server.js",
   "scripts": {
+    "build": "echo Build complete",
     "start": "node server.js",
     "dev": "NODE_ENV=development node server.js",
-    "check": "node --check server.js && node --check scripts/verify-domain-smoke.mjs && node --check scripts/production-smoke.mjs",
+    "check": "node --check server.js && node --check scripts/verify-domain-smoke.mjs && node --check scripts/production-smoke.mjs && node --check scripts/hostinger-start-check.mjs",
     "smoke:verify": "node scripts/verify-domain-smoke.mjs",
     "smoke:prod": "node scripts/production-smoke.mjs",
     "validate:prod": "npm run check && npm run smoke:prod"
