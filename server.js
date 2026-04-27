@@ -4,9 +4,8 @@ const { Pool } = require('pg');
 const crypto = require('crypto');
 
 const NODE_ENV = process.env.NODE_ENV || 'development';
-const IS_PRODUCTION = NODE_ENV === 'production';
 const PORT = Number(process.env.PORT || 3000);
-const DATABASE_URL = process.env.DATABASE_URL;
+const DATABASE_URL = process.env.DATABASE_URL || '';
 const APP_BASE_URL = process.env.APP_BASE_URL || 'https://verify.qrv.network';
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 const RATE_LIMIT_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS || 60_000);
@@ -14,26 +13,35 @@ const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX || 100);
 const VERSION = process.env.APP_VERSION || process.env.npm_package_version || '1.0.0';
 const QRVID_FORMAT = /^[A-Z0-9][A-Z0-9-]{5,127}$/;
 
-function getConfigIssues() {
-  const issues = [];
-  if (IS_PRODUCTION && !DATABASE_URL) issues.push('DATABASE_URL is missing');
-  return issues;
-}
+const app = express();
+app.disable('x-powered-by');
+app.set('trust proxy', 1);
+app.use(cors());
+app.use(express.json({ limit: '1mb' }));
 
 const pool = DATABASE_URL
   ? new Pool({
       connectionString: DATABASE_URL,
-      ssl: process.env.PGSSLMODE === 'disable' ? false : { rejectUnauthorized: false }
+      ssl: process.env.PGSSLMODE === 'disable' ? false : { rejectUnauthorized: false },
+      connectionTimeoutMillis: Number(process.env.PG_CONNECTION_TIMEOUT_MS || 3000),
+      idleTimeoutMillis: Number(process.env.PG_IDLE_TIMEOUT_MS || 10000)
     })
   : null;
 
-const app = express();
-app.disable('x-powered-by');
-app.use(cors());
-app.use(express.json());
+if (pool) {
+  pool.on('error', (error) => {
+    console.error('PostgreSQL pool error:', error.message);
+  });
+}
 
 const metrics = { requestsTotal: 0, routes: {} };
 const rateLimitStore = new Map();
+
+function getConfigIssues() {
+  const issues = [];
+  if (!DATABASE_URL) issues.push('DATABASE_URL is not configured');
+  return issues;
+}
 
 function incrementRouteMetric(routeKey) {
   metrics.routes[routeKey] = (metrics.routes[routeKey] || 0) + 1;
@@ -80,7 +88,7 @@ function escapeHtml(value) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
+    .replace(/\"/g, '&quot;')
     .replace(/'/g, '&#39;');
 }
 
@@ -92,12 +100,12 @@ function renderLayout({ title, body }) {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>${escapeHtml(title)}</title>
   <style>
-    :root { color-scheme: light dark; }
+    :root { color-scheme: dark; }
     body { font-family: Inter, Arial, sans-serif; margin: 0; background: radial-gradient(circle at top, #14346f 0%, #071126 55%, #050a17 100%); color: #e6e9f5; min-height: 100vh; }
     .wrap { max-width: 920px; margin: 0 auto; padding: 48px 20px; }
     .card { background: rgba(18, 26, 51, 0.92); border: 1px solid #2e427a; border-radius: 18px; padding: 28px; box-shadow: 0 18px 60px rgba(0,0,0,.25); }
     .eyebrow { color: #f2d06b; text-transform: uppercase; letter-spacing: .14em; font-weight: 800; font-size: 13px; }
-    h1, h2 { margin-top: 0; color: #fff; font-size: clamp(34px, 7vw, 64px); line-height: 1.03; }
+    h1 { margin-top: 0; color: #fff; font-size: clamp(34px, 7vw, 64px); line-height: 1.03; }
     p, li { line-height: 1.55; font-size: 18px; }
     .muted { color: #c7d2f3; }
     .row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 24px; }
@@ -147,7 +155,8 @@ async function getVerificationState(qrvid) {
     if (status === 'revoked') return { state: 'REVOKED', message: 'This record has been revoked by the issuer.', record };
     if (status === 'expired') return { state: 'EXPIRED', message: 'This record has expired and is no longer valid.', record };
     return { state: 'VERIFIED', message: 'This record is valid and currently active.', record };
-  } catch (_error) {
+  } catch (error) {
+    console.error('Verification lookup failed:', error.message);
     return { state: 'UNAVAILABLE', message: 'Verification service is temporarily unavailable.' };
   }
 }
@@ -155,7 +164,7 @@ async function getVerificationState(qrvid) {
 async function resolveVerification(qrvidRaw) {
   const qrvid = normalizeQrvid(qrvidRaw);
   const payload = await getVerificationState(qrvid);
-  const statusCodeByState = { VERIFIED: 200, REVOKED: 200, EXPIRED: 200, INVALID_FORMAT: 400, NOT_FOUND: 404, UNAVAILABLE: 503 };
+  const statusCodeByState = { VERIFIED: 200, REVOKED: 200, EXPIRED: 200, INVALID_FORMAT: 400, NOT_FOUND: 404, UNAVAILABLE: 200 };
   return {
     qrvid,
     payload,
@@ -177,13 +186,12 @@ app.get('/healthz', (_req, res) => res.json({ status: 'ok', service: 'qrv-verify
 app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'qrv-verify', uptime: process.uptime(), environment: NODE_ENV }));
 app.get('/version', (_req, res) => res.json({ version: VERSION, service: 'qrv-verify', environment: NODE_ENV }));
 app.get('/readyz', async (_req, res) => {
-  const issues = getConfigIssues();
-  if (issues.length) return res.status(503).json({ ready: false, database: 'unknown', issues });
   try {
     if (pool) await pool.query('SELECT 1');
-    return res.json({ ready: true, database: pool ? 'ok' : 'not_configured', issues: [] });
+    return res.json({ ready: true, database: pool ? 'ok' : 'not_configured', issues: getConfigIssues() });
   } catch (error) {
-    return res.status(503).json({ ready: false, database: 'unavailable', issues: [error.message] });
+    console.error('Readiness check failed:', error.message);
+    return res.status(200).json({ ready: false, database: 'unavailable', issues: [error.message] });
   }
 });
 
@@ -219,13 +227,30 @@ app.use((req, res) => {
   res.status(404).type('html').send(renderLayout({ title: 'QR-V™ Verification Portal • Not Found', body: `<section class="card"><h1>QR-V™ Verification Portal</h1><p><span class="status NOT_FOUND">NOT_FOUND</span></p><p>The route <code>${escapeHtml(req.path)}</code> does not exist.</p><p><a class="btn" href="/">Go to portal home</a></p></section>` }));
 });
 
+app.use((error, _req, res, _next) => {
+  console.error('Unhandled request error:', error);
+  res.status(200).json({ ok: false, state: 'UNAVAILABLE', message: 'Verification service is temporarily unavailable.' });
+});
+
 async function start() {
   const issues = getConfigIssues();
   if (issues.length) {
-    console.warn(`QR-V Verify starting with readiness issues: ${issues.join('; ')}`);
+    console.warn(`QR-V Verify starting in degraded mode: ${issues.join('; ')}`);
   }
-  app.listen(PORT, '0.0.0.0', () => console.log(`QR-V Verify running on 0.0.0.0:${PORT}`));
+  const server = app.listen(PORT, '0.0.0.0', () => console.log(`QR-V Verify running on 0.0.0.0:${PORT}`));
+  server.on('error', (error) => {
+    console.error('HTTP server error:', error);
+    process.exit(1);
+  });
 }
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught exception:', error);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled rejection:', reason);
+});
 
 if (require.main === module) {
   start().catch((error) => {
