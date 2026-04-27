@@ -220,7 +220,10 @@ app.use((req, res) => {
 });
 
 async function start() {
-  if (IS_PRODUCTION && !DATABASE_URL) throw new Error('DATABASE_URL is required in production');
+  const issues = getConfigIssues();
+  if (issues.length) {
+    console.warn(`QR-V Verify starting with readiness issues: ${issues.join('; ')}`);
+  }
   app.listen(PORT, '0.0.0.0', () => console.log(`QR-V Verify running on 0.0.0.0:${PORT}`));
 }
 
