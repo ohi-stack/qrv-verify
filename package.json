@@ -7,9 +7,10 @@
   "scripts": {
     "start": "node server.js",
     "dev": "NODE_ENV=development node server.js",
-    "check": "node --check server.js && node --check scripts/verify-domain-smoke.mjs",
+    "check": "node --check server.js && node --check scripts/verify-domain-smoke.mjs && node --check scripts/production-smoke.mjs",
     "smoke:verify": "node scripts/verify-domain-smoke.mjs",
-    "validate:prod": "npm run check"
+    "smoke:prod": "node scripts/production-smoke.mjs",
+    "validate:prod": "npm run check && npm run smoke:prod"
   },
   "engines": {
     "node": ">=20"
